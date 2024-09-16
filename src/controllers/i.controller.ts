@@ -75,6 +75,11 @@ export default async function (fastify: FastifyInstance) {
         return reply
           .send(data)
       }
+      request.log.fatal({
+        params: {
+          guid: request.params.guid.toLowerCase()
+        }
+      }, 'file not found')
       return reply
         .code(404)
         .send()
@@ -113,10 +118,8 @@ export default async function (fastify: FastifyInstance) {
       const response = await repo.getGuidByParams(request.params.company, request.params.objecttype, request.params.documenttype, request.params.itemnum ?? '100', request.params.language ?? 'nl', request.query.size ?? 'any', request.query.swp != undefined)
 
       if (response) {
-        /** @type {string} */
-        const _guid = response.result.guid.toLowerCase()
-        /** @type {string} */
-        const _fn = `${env['DATA_PATH']}/content/${_guid.substring(0, 2)}/${_guid}/file`
+        const _guid: string = response.result.guid.toLowerCase()
+        const _fn: string = `${env['DATA_PATH']}/content/${_guid.substring(0, 2)}/${_guid}/file`
 
         if (fs.existsSync(_fn)) {
           const lastMod = fs.statSync(_fn).mtime
@@ -135,10 +138,26 @@ export default async function (fastify: FastifyInstance) {
           return reply
             .send(data)
         }
+        request.log.fatal({
+          params: {
+            guid: response.result.guid.toLowerCase()
+          }
+        }, 'file not found')
         return reply
           .code(400)
           .send()
       } else {
+        request.log.debug({
+          params: {
+            company: request.params.company,
+            objecttype: request.params.objecttype,
+            documenttype: request.params.documenttype,
+            itemnum: request.params.itemnum ?? '100',
+            language: request.params.language ?? 'nl',
+            size: request.query.size ?? 'any',
+            swp: request.query.swp != undefined
+          }
+        }, 'no file found for given params')
         const data = Buffer.from('R0lGODlhAQABAIAAAP///wAAACwAAAAAAQABAAACAkQBADs=', 'base64')
         return reply.header('Cache-Control', 'must-revalidate, max-age=172800, private')
           .header('image-color', '#FFFFFF')
