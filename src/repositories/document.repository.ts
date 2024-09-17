@@ -21,16 +21,19 @@ export default class Document {
     r.input('document_type', sql.VarChar, filters.documentType)
     r.input('object_id', sql.BigInt, filters.objectId)
     r.input('culture', sql.VarChar, filters.culture)
-
     let result = await r.execute(`${this.schema}usp_findOne`)
 
     if (result.recordset && result.recordset.length === 1) {
+      this._logger.debug(`${this.schema}usp_findOne returned one record!`)
       return result.recordset[0]
     } else if (result.recordset && result.recordset.length > 1) {
+      this._logger.warn(`${this.schema}usp_findOne returned multiple records!`)
       console.error('Wrong number of records, return first result')
       return result.recordset[0]
+    } else {
+      this._logger.debug(`${this.schema}usp_findOne returned no records!`)
+      return undefined
     }
-    return undefined
   }
 
   async getGuidByParams(company: string, objecttype: string, documenttype: string, itemnum: string, language: string, size: string, swp: boolean) {
