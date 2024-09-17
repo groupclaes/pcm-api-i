@@ -11,31 +11,6 @@ export default class Document {
     this._pool = pool
   }
 
-  async findOne(filters) {
-    const r = new sql.Request(this._pool)
-    r.input('id', sql.Int, filters.id)
-    r.input('guid', sql.UniqueIdentifier, filters.guid)
-    r.input('company', sql.Char, filters.company)
-    r.input('company_oe', sql.Char, filters.companyOe)
-    r.input('object_type', sql.VarChar, filters.objectType)
-    r.input('document_type', sql.VarChar, filters.documentType)
-    r.input('object_id', sql.BigInt, filters.objectId)
-    r.input('culture', sql.VarChar, filters.culture)
-    let result = await r.execute(`${this.schema}usp_findOne`)
-
-    if (result.recordset && result.recordset.length === 1) {
-      this._logger.debug(`${this.schema}usp_findOne returned one record!`)
-      return result.recordset[0]
-    } else if (result.recordset && result.recordset.length > 1) {
-      this._logger.warn(`${this.schema}usp_findOne returned multiple records!`)
-      console.error('Wrong number of records, return first result')
-      return result.recordset[0]
-    } else {
-      this._logger.debug(`${this.schema}usp_findOne returned no records!`)
-      return undefined
-    }
-  }
-
   async getGuidByParams(company: string, objecttype: string, documenttype: string, itemnum: string, language: string, size: string, swp: boolean) {
     const r = new sql.Request(this._pool)
     r.input('company', sql.VarChar, company)
@@ -55,8 +30,10 @@ export default class Document {
       }
     }
     if (swp) {
+      this._logger.debug(`Found no records, returning undefined!`)
       return undefined
     }
+    this._logger.debug(`Found no records, returning undefined!`)
     return { result: { guid: '6258fae1-fbd0-45f1-8aef-68b76a30276e' } }
   }
 }
