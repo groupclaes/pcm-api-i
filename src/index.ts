@@ -14,7 +14,7 @@ export default async function (config: any): Promise<FastifyInstance | undefined
   const fastify = await Fastify({ ...config.wrapper })
   const version_prefix = (env.APP_VERSION ? '/' + env.APP_VERSION : '')
   fastify.register(FastifyEtag)
-  fastify.log.level = 'info'
+  fastify.log.level = LOGLEVEL
   await fastify.register(iController, { prefix: `${version_prefix}/${config.wrapper.serviceName}`, logLevel: LOGLEVEL })
   await fastify.register(manageController, { prefix: `${version_prefix}/${config.wrapper.serviceName}/manage`, logLevel: LOGLEVEL })
 
@@ -36,7 +36,7 @@ export default async function (config: any): Promise<FastifyInstance | undefined
       }
 
       return reply
-        .redirect(301, `https://pcm.groupclaes.be/v4/i/dis/artikel/foto/${itemNum}?s=${size}`)
+        .redirect(`https://pcm.groupclaes.be/v4/i/dis/artikel/foto/${itemNum}?s=${size}`, 301)
     }
   })
   await fastify.listen({ port: +(env['PORT'] ?? 80), host: '::' })
