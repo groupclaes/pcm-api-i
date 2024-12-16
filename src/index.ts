@@ -10,6 +10,7 @@ const LOGLEVEL = 'debug'
 
 export default async function (config: any): Promise<FastifyInstance | undefined> {
   if (!config || !config.wrapper) return
+  if (!config.wrapper.mssql && config.mssql) config.wrapper.mssql = config.mssql
 
   const fastify = await Fastify({ ...config.wrapper })
   const version_prefix = (env.APP_VERSION ? '/' + env.APP_VERSION : '')
