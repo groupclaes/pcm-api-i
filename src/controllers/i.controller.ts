@@ -3,7 +3,7 @@ import sql from 'mssql'
 import { JWTPayload } from 'jose'
 import { env } from 'process'
 import fs from 'fs'
-import imageTools from '@groupclaes/pcm-imagetools'
+import imageTools, { ImageOptions } from '@groupclaes/pcm-imagetools'
 import Document from '../repositories/document.repository'
 import sha1 from '../crypto'
 let config = require('./config')
@@ -35,7 +35,8 @@ export default async function (fastify: FastifyInstance) {
       guid: string
     },
     Querystring: {
-      s?: string
+      s?: string,
+      ext?: string
     }
   }>, reply: FastifyReply) {
     const start = performance.now()
@@ -43,7 +44,7 @@ export default async function (fastify: FastifyInstance) {
     try {
       const s: string = request.query.s ?? 'source'
 
-      let options: IToolsOptions = {
+      let options: any = {
         size: config.imageSizeMap[s] ?? 800,
         quality: config.imageQualityMap[s] ?? config.defaultImageQuality,
         cache: config.cacheEnabled ?? false,
@@ -52,6 +53,9 @@ export default async function (fastify: FastifyInstance) {
       }
       const _guid: string = request.params.guid.toLowerCase()
       const _fn: string = `${env['DATA_PATH']}/content/${_guid.substring(0, 2)}/${_guid}/file`
+
+      if (request.query.ext)
+        options.format = request.query.ext
 
       if (fs.existsSync(_fn)) {
         const lastMod = fs.statSync(_fn).mtime
@@ -62,7 +66,7 @@ export default async function (fastify: FastifyInstance) {
           .header('image-guid', _guid)
           .header('Expires', new Date(new Date().getTime() + 172800000).toUTCString())
           .header('Last-Modified', lastMod.toUTCString())
-          .type(options.webp ? 'image/webp' : 'image/jpeg')
+          .type(resolveMimeType(options))
           .header('etag', etag)
 
         // if response size = source and mimetype is gif, return base file
@@ -174,9 +178,22 @@ export default async function (fastify: FastifyInstance) {
   fastify.get('/:company/:objecttype/:documenttype/:itemnum/:language', getByPath)
 }
 
-interface IToolsOptions {
-  size: number,
-  quality?: number
-  cache?: boolean
-  webp: boolean
+function resolveMimeType(options) {
+  switch (options.format) {
+    case 'png':
+      return 'image/png'
+
+    case 'gif':
+      return 'image/gif'
+
+    case 'jpg':
+    case 'jpeg':
+      return 'image/jpeg'
+
+    case 'webp':
+      return 'image/webp'
+
+    default:
+      return options.webp ? 'image/webp' : 'image/jpeg'
+  }
 }
