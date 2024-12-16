@@ -4,7 +4,7 @@
   "description": "",
   "main": "index.min.js",
   "scripts": {
-    "build": "esbuild ./src/index.ts --bundle --platform=node --minify --packages=external --external:'./config' --outfile=index.min.js",
+    "build": "esbuild ./index.ts --bundle --platform=node --minify --packages=external --external:'./config' --outfile=index.min.js",
     "publish": "npm run build && ./build.sh"
   },
   "author": "Jamie Vangeysel",

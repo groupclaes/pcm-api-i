@@ -54,8 +54,13 @@ export default async function (fastify: FastifyInstance) {
       const _guid: string = request.params.guid.toLowerCase()
       const _fn: string = `${env['DATA_PATH']}/content/${_guid.substring(0, 2)}/${_guid}/file`
 
-      if (request.query.ext)
+      if (request.query.ext) {
+        options.quality = 100
         options.format = request.query.ext
+      }
+
+      if (request.query.s === 'original')
+        options.size = 0
 
       if (fs.existsSync(_fn)) {
         const lastMod = fs.statSync(_fn).mtime
