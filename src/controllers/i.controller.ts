@@ -1,36 +1,20 @@
 import { FastifyInstance, FastifyRequest, FastifyReply } from 'fastify'
-import sql from 'mssql'
-import { JWTPayload } from 'jose'
 import { env } from 'process'
 import fs from 'fs'
 import imageTools, { ImageOptions } from '@groupclaes/pcm-imagetools'
 import Document from '../repositories/document.repository'
 import sha1 from '../crypto'
-let config = require('./config')
+import { createReadStream } from 'node:fs'
+import { ConnectionPool } from 'mssql'
 
-declare module 'fastify' {
-  export interface FastifyInstance {
-    getSqlPool: (name?: string) => Promise<sql.ConnectionPool>
-  }
-  export interface FastifyRequest {
-    jwt: JWTPayload
-    hasRole: (role: string) => boolean
-    hasPermission: (permission: string, scope?: string) => boolean
-  }
+let config: any = require('./config')
 
-  export interface FastifyReply {
-    success: (data?: any, code?: number, executionTime?: number) => FastifyReply
-    fail: (data?: any, code?: number, executionTime?: number) => FastifyReply
-    error: (message?: string, code?: number, executionTime?: number) => FastifyReply
-  }
-}
-
-export default async function (fastify: FastifyInstance) {
+export default async function(fastify: FastifyInstance): Promise<void> {
   /**
    * Get all attribute entries from DB
    * @route GET /{APP_VERSION}/i/:guid
    */
-  fastify.get('/:guid', async function (request: FastifyRequest<{
+  fastify.get('/:guid', async function(request: FastifyRequest<{
     Params: {
       guid: string
     },
@@ -38,21 +22,32 @@ export default async function (fastify: FastifyInstance) {
       s?: string,
       ext?: string
     }
-  }>, reply: FastifyReply) {
-    const start = performance.now()
+  }>, reply: FastifyReply): Promise<FastifyReply> {
+    const start: number = performance.now()
+
+    const s: string = request.query.s ?? 'source'
+    const _guid: string = request.params.guid.toLowerCase()
+    const _fn: string = `${env['DATA_PATH']}/content/${_guid.substring(0, 2)}/${_guid}/file`
 
     try {
-      const s: string = request.query.s ?? 'source'
+      const pool: ConnectionPool = await fastify.getSqlPool()
+      const repository = new Document(request.log, pool)
 
-      let options: any = {
+      let document: any = await repository.findOne({
+        guid: _guid
+      })
+      if (!document)
+        return reply
+          .code(404)
+          .send()
+
+      let options: ImageToolsOptions = {
         size: config.imageSizeMap[s] ?? 800,
         quality: config.imageQualityMap[s] ?? config.defaultImageQuality,
         cache: config.cacheEnabled ?? false,
         // Enable webp automatically if the client supports it
-        webp: (request.headers['accept'] && request.headers['accept'].indexOf('image/webp') > -1) ? true : false
+        webp: request.headers['accept'] && request.headers['accept'].indexOf('image/webp') > -1
       }
-      const _guid: string = request.params.guid.toLowerCase()
-      const _fn: string = `${env['DATA_PATH']}/content/${_guid.substring(0, 2)}/${_guid}/file`
 
       if (request.query.ext) {
         options.quality = 100
@@ -63,25 +58,41 @@ export default async function (fastify: FastifyInstance) {
         options.size = 0
 
       if (fs.existsSync(_fn)) {
-        const lastMod = fs.statSync(_fn).mtime
-        const etag = sha1(lastMod.toISOString())
+        const lastMod: Date = fs.statSync(_fn).mtime
+        const etag: any = sha1(lastMod.toISOString())
 
         reply.header('Cache-Control', 'must-revalidate, max-age=172800, private')
           .header('image-color', await imageTools.getColor(_fn, options))
           .header('image-guid', _guid)
           .header('Expires', new Date(new Date().getTime() + 172800000).toUTCString())
           .header('Last-Modified', lastMod.toUTCString())
-          .type(resolveMimeType(options))
           .header('etag', etag)
 
-        // if response size = source and mimetype is gif, return base file
-        if (s === 'source')
-          return reply
-            .send(fs.readFileSync(_fn).toString('utf8'))
+        const svg_compatible: boolean = request.headers.accept && request.headers.accept.indexOf('image/svg+xml') > -1
 
-        const data = await imageTools.getImage(_fn, '/' + (config.imageSizeFileMap[options.size] ?? 'file'), etag, options)
+        // if response size = source return base file if it is supported
+        if (s === 'source' && options.webp) {
+          switch (document.mimeType) {
+            case 'image/svg+xml':
+              if (svg_compatible)
+                return reply
+                  .type(document.mimeType)
+                  .send(createReadStream(_fn))
+              break
+
+            case 'image/webp':
+              if (options.webp)
+                return reply
+                  .type(document.mimeType)
+                  .send(createReadStream(_fn))
+              break
+          }
+        }
+
+        const data: Buffer = await imageTools.getImage(_fn, '/' + (config.imageSizeFileMap[options.size] ?? 'file'), etag, options)
 
         return reply
+          .type(resolveMimeType(options))
           .send(data)
       }
       request.log.fatal({
@@ -97,7 +108,7 @@ export default async function (fastify: FastifyInstance) {
     }
   })
 
-  const getByPath = async function (request: FastifyRequest<{
+  const getByPath = async function(request: FastifyRequest<{
     Params: {
       company: string
       objecttype: string
@@ -109,7 +120,7 @@ export default async function (fastify: FastifyInstance) {
       size?: string
       s?: string
     }
-  }>, reply) {
+  }>, reply: FastifyReply): Promise<FastifyReply> {
     try {
       const pool = await fastify.getSqlPool()
       const repo = new Document(request.log, pool)
@@ -120,7 +131,7 @@ export default async function (fastify: FastifyInstance) {
         quality: config.imageQualityMap[s] ?? config.defaultImageQuality,
         cache: config.cacheEnabled ?? false,
         // Enable webp automatically if the client supports it
-        webp: (request.headers['accept'] && request.headers['accept'].indexOf('image/webp') > -1) ? true : false
+        webp: request.headers['accept'] && request.headers['accept'].indexOf('image/webp') > -1
       }
 
       // get file guid for request
@@ -174,7 +185,9 @@ export default async function (fastify: FastifyInstance) {
           .send(data)
       }
     } catch (err) {
-      throw err
+      return reply
+        .status(500)
+        .send(err)
     }
   }
 
@@ -183,7 +196,7 @@ export default async function (fastify: FastifyInstance) {
   fastify.get('/:company/:objecttype/:documenttype/:itemnum/:language', getByPath)
 }
 
-function resolveMimeType(options) {
+function resolveMimeType(options: ImageToolsOptions): string {
   switch (options.format) {
     case 'png':
       return 'image/png'
@@ -201,4 +214,8 @@ function resolveMimeType(options) {
     default:
       return options.webp ? 'image/webp' : 'image/jpeg'
   }
+}
+
+interface ImageToolsOptions extends ImageOptions {
+  quality?: number
 }
