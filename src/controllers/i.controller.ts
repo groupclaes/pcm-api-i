@@ -1,77 +1,105 @@
 import { FastifyInstance, FastifyRequest, FastifyReply } from 'fastify'
-import { JWTPayload } from 'jose'
 import { env } from 'process'
 import fs from 'fs'
-import imageTools from '@groupclaes/pcm-imagetools'
+import imageTools, { ImageOptions } from '@groupclaes/pcm-imagetools'
 import Document from '../repositories/document.repository'
 import sha1 from '../crypto'
-let config = require('./config')
+import { createReadStream } from 'node:fs'
+import { ConnectionPool } from 'mssql'
 
-declare module 'fastify' {
-  export interface FastifyRequest {
-    jwt: JWTPayload
-    hasRole: (role: string) => boolean
-    hasPermission: (permission: string, scope?: string) => boolean
-  }
+let config: any = require('./config')
 
-  export interface FastifyReply {
-    success: (data?: any, code?: number, executionTime?: number) => FastifyReply
-    fail: (data?: any, code?: number, executionTime?: number) => FastifyReply
-    error: (message?: string, code?: number, executionTime?: number) => FastifyReply
-  }
-}
-
-export default async function (fastify: FastifyInstance) {
+export default async function(fastify: FastifyInstance): Promise<void> {
   /**
    * Get all attribute entries from DB
    * @route GET /{APP_VERSION}/i/:guid
    */
-  fastify.get('/:guid', async function (request: FastifyRequest<{
+  fastify.get('/:guid', async function(request: FastifyRequest<{
     Params: {
       guid: string
     },
     Querystring: {
-      s?: string
+      s?: string,
+      ext?: string
     }
-  }>, reply: FastifyReply) {
-    const start = performance.now()
+  }>, reply: FastifyReply): Promise<FastifyReply> {
+    const start: number = performance.now()
+
+    const s: string = request.query.s ?? 'source'
+    const _guid: string = request.params.guid.toLowerCase()
+    const _fn: string = `${env['DATA_PATH']}/content/${_guid.substring(0, 2)}/${_guid}/file`
 
     try {
-      const s: string = request.query.s ?? 'source'
+      const pool: ConnectionPool = await fastify.getSqlPool()
+      const repository = new Document(request.log, pool)
 
-      let options: IToolsOptions = {
+      let document: any = await repository.findOne({
+        guid: _guid
+      })
+      if (!document)
+        return reply
+          .code(404)
+          .send()
+
+      let options: ImageToolsOptions = {
         size: config.imageSizeMap[s] ?? 800,
         quality: config.imageQualityMap[s] ?? config.defaultImageQuality,
         cache: config.cacheEnabled ?? false,
         // Enable webp automatically if the client supports it
-        webp: (request.headers['accept'] && request.headers['accept'].indexOf('image/webp') > -1) ? true : false
+        webp: request.headers['accept'] && request.headers['accept'].indexOf('image/webp') > -1
       }
-      const _guid: string = request.params.guid.toLowerCase()
-      const _fn: string = `${env['DATA_PATH']}/content/${_guid.substring(0, 2)}/${_guid}/file`
+
+      if (request.query.ext) {
+        options.quality = 100
+        options.format = request.query.ext
+      }
+
+      if (request.query.s === 'original')
+        options.size = 0
 
       if (fs.existsSync(_fn)) {
-        const lastMod = fs.statSync(_fn).mtime
-        const etag = sha1(lastMod.toISOString())
+        const lastMod: Date = fs.statSync(_fn).mtime
+        const etag: any = sha1(lastMod.toISOString())
 
         reply.header('Cache-Control', 'must-revalidate, max-age=172800, private')
           .header('image-color', await imageTools.getColor(_fn, options))
           .header('image-guid', _guid)
           .header('Expires', new Date(new Date().getTime() + 172800000).toUTCString())
           .header('Last-Modified', lastMod.toUTCString())
-          .type(options.webp ? 'image/webp' : 'image/jpeg')
           .header('etag', etag)
 
-        // if response size = source and mimetype is gif, return base file
-        if (s === 'source') {
-          return reply
-            .send(fs.readFileSync(_fn).toString('utf8'))
+        const svg_compatible: boolean = request.headers.accept && request.headers.accept.indexOf('image/svg+xml') > -1
+
+        // if response size = source return base file if it is supported
+        if (s === 'source' && options.webp) {
+          switch (document.mimeType) {
+            case 'image/svg+xml':
+              if (svg_compatible)
+                return reply
+                  .type(document.mimeType)
+                  .send(createReadStream(_fn))
+              break
+
+            case 'image/webp':
+              if (options.webp)
+                return reply
+                  .type(document.mimeType)
+                  .send(createReadStream(_fn))
+              break
+          }
         }
 
-        const data = await imageTools.getImage(_fn, '/' + (config.imageSizeFileMap[options.size] ?? 'file'), etag, options)
+        const data: Buffer = await imageTools.getImage(_fn, '/' + (config.imageSizeFileMap[options.size] ?? 'file'), etag, options)
 
         return reply
+          .type(resolveMimeType(options))
           .send(data)
       }
+      request.log.fatal({
+        params: {
+          guid: request.params.guid.toLowerCase()
+        }
+      }, 'file not found')
       return reply
         .code(404)
         .send()
@@ -80,86 +108,114 @@ export default async function (fastify: FastifyInstance) {
     }
   })
 
+  const getByPath = async function(request: FastifyRequest<{
+    Params: {
+      company: string
+      objecttype: string
+      documenttype: string
+      itemnum?: string
+      language?: string
+    }, Querystring: {
+      swp?: boolean
+      size?: string
+      s?: string
+    }
+  }>, reply: FastifyReply): Promise<FastifyReply> {
+    try {
+      const pool = await fastify.getSqlPool()
+      const repo = new Document(request.log, pool)
+      const s: string = request.query.s ?? 'source'
+
+      let options = {
+        size: config.imageSizeMap[s] ?? 800,
+        quality: config.imageQualityMap[s] ?? config.defaultImageQuality,
+        cache: config.cacheEnabled ?? false,
+        // Enable webp automatically if the client supports it
+        webp: request.headers['accept'] && request.headers['accept'].indexOf('image/webp') > -1
+      }
+
+      // get file guid for request
+      const response = await repo.getGuidByParams(request.params.company, request.params.objecttype, request.params.documenttype, request.params.itemnum ?? '100', request.params.language ?? 'nl', request.query.size ?? 'any', request.query.swp != undefined)
+
+      if (response) {
+        const _guid: string = response.result.guid.toLowerCase()
+        const _fn: string = `${env['DATA_PATH']}/content/${_guid.substring(0, 2)}/${_guid}/file`
+
+        if (fs.existsSync(_fn)) {
+          const lastMod = fs.statSync(_fn).mtime
+          const etag = sha1(lastMod.toISOString())
+
+          reply.header('Cache-Control', 'must-revalidate, max-age=172800, private')
+            .header('image-color', await imageTools.getColor(_fn, options))
+            .header('image-guid', _guid)
+            .header('Expires', new Date(new Date().getTime() + 172800000).toUTCString())
+            .header('Last-Modified', lastMod.toUTCString())
+            .type(options.webp ? 'image/webp' : 'image/jpeg')
+            .header('etag', etag)
+
+          const data = await imageTools.getImage(_fn, '/' + (config.imageSizeFileMap[options.size] ?? 'file'), etag, options)
+
+          return reply
+            .send(data)
+        }
+        request.log.fatal({
+          params: {
+            guid: response.result.guid.toLowerCase()
+          }
+        }, 'file not found')
+        return reply
+          .code(400)
+          .send()
+      } else {
+        request.log.debug({
+          params: {
+            company: request.params.company,
+            objecttype: request.params.objecttype,
+            documenttype: request.params.documenttype,
+            itemnum: request.params.itemnum ?? '100',
+            language: request.params.language ?? 'nl',
+            size: request.query.size ?? 'any',
+            swp: request.query.swp != undefined
+          }
+        }, 'no file found for given params')
+        const data = Buffer.from('R0lGODlhAQABAIAAAP///wAAACwAAAAAAQABAAACAkQBADs=', 'base64')
+        return reply.header('Cache-Control', 'must-revalidate, max-age=172800, private')
+          .header('image-color', '#FFFFFF')
+          .type('image/gif')
+          .send(data)
+      }
+    } catch (err) {
+      return reply
+        .status(500)
+        .send(err)
+    }
+  }
+
   fastify.get('/:company/:objecttype/:documenttype', getByPath)
   fastify.get('/:company/:objecttype/:documenttype/:itemnum', getByPath)
   fastify.get('/:company/:objecttype/:documenttype/:itemnum/:language', getByPath)
 }
 
-/**
- * 
- * @param {FastifyRequest} req 
- * @param {FastifyReply} reply 
- * @returns 
- */
-async function getByPath(request: FastifyRequest<{
-  Params: {
-    company: string
-    objecttype: string
-    documenttype: string
-    itemnum?: string
-    language?: string
-  }, Querystring: {
-    swp?: boolean
-    size?: string
-    s?: string
-  }
-}>, reply) {
-  try {
-    const repo = new Document(request.log)
-    const s: string = request.query.s ?? 'source'
+function resolveMimeType(options: ImageToolsOptions): string {
+  switch (options.format) {
+    case 'png':
+      return 'image/png'
 
-    let options = {
-      size: config.imageSizeMap[s] ?? 800,
-      quality: config.imageQualityMap[s] ?? config.defaultImageQuality,
-      cache: config.cacheEnabled ?? false,
-      // Enable webp automatically if the client supports it
-      webp: (request.headers['accept'] && request.headers['accept'].indexOf('image/webp') > -1) ? true : false
-    }
+    case 'gif':
+      return 'image/gif'
 
-    // get file guid for request
-    const response = await repo.getGuidByParams(request.params.company, request.params.objecttype, request.params.documenttype, request.params.itemnum ?? '100', request.params.language ?? 'nl', request.query.size ?? 'any', request.query.swp != undefined)
+    case 'jpg':
+    case 'jpeg':
+      return 'image/jpeg'
 
-    if (response) {
-      /** @type {string} */
-      const _guid = response.result.guid.toLowerCase()
-      /** @type {string} */
-      const _fn = `${env['DATA_PATH']}/content/${_guid.substring(0, 2)}/${_guid}/file`
+    case 'webp':
+      return 'image/webp'
 
-      if (fs.existsSync(_fn)) {
-        const lastMod = fs.statSync(_fn).mtime
-        const etag = sha1(lastMod.toISOString())
-
-        reply.header('Cache-Control', 'must-revalidate, max-age=172800, private')
-          .header('image-color', await imageTools.getColor(_fn, options))
-          .header('image-guid', _guid)
-          .header('Expires', new Date(new Date().getTime() + 172800000).toUTCString())
-          .header('Last-Modified', lastMod.toUTCString())
-          .type(options.webp ? 'image/webp' : 'image/jpeg')
-          .header('etag', etag)
-
-        const data = await imageTools.getImage(_fn, '/' + (config.imageSizeFileMap[options.size] ?? 'file'), etag, options)
-
-        return reply
-          .send(data)
-      }
-      return reply
-        .code(400)
-        .send()
-    } else {
-      const data = Buffer.from('R0lGODlhAQABAIAAAP///wAAACwAAAAAAQABAAACAkQBADs=', 'base64')
-      return reply.header('Cache-Control', 'must-revalidate, max-age=172800, private')
-        .header('image-color', '#FFFFFF')
-        .type('image/gif')
-        .send(data)
-    }
-  } catch (err) {
-    throw err
+    default:
+      return options.webp ? 'image/webp' : 'image/jpeg'
   }
 }
 
-interface IToolsOptions {
-  size: number,
+interface ImageToolsOptions extends ImageOptions {
   quality?: number
-  cache?: boolean
-  webp: boolean
 }

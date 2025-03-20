@@ -1,18 +1,18 @@
 import sql from 'mssql'
-import db from '../db'
 import { FastifyBaseLogger } from 'fastify'
-
-const DB_NAME = 'PCM'
 
 export default class Document {
   schema: string = '[document].'
   _logger: FastifyBaseLogger
+  _pool: sql.ConnectionPool
 
-  constructor(logger: FastifyBaseLogger) { this._logger = logger }
+  constructor(logger: FastifyBaseLogger, pool: sql.ConnectionPool) {
+    this._logger = logger
+    this._pool = pool
+  }
 
   async findOne(filters) {
-    const r = new sql.Request(await db.get(DB_NAME))
-
+    const r = new sql.Request(this._pool)
     r.input('id', sql.Int, filters.id)
     r.input('guid', sql.UniqueIdentifier, filters.guid)
     r.input('company', sql.Char, filters.company)
@@ -21,20 +21,24 @@ export default class Document {
     r.input('document_type', sql.VarChar, filters.documentType)
     r.input('object_id', sql.BigInt, filters.objectId)
     r.input('culture', sql.VarChar, filters.culture)
+    r.input('size', sql.VarChar, filters.size)
+
+    this._logger.debug({ sqlParam: { filters }, sqlSchema: this.schema, sqlProc: 'usp_findOne' }, 'running procedure')
 
     let result = await r.execute(`${this.schema}usp_findOne`)
+    this._logger.debug({ result }, 'procedure result')
 
     if (result.recordset && result.recordset.length === 1) {
       return result.recordset[0]
     } else if (result.recordset && result.recordset.length > 1) {
-      console.error('Wrong number of records, return first result')
+      this._logger.error('Wrong number of records, return first result')
       return result.recordset[0]
     }
     return undefined
   }
 
   async getGuidByParams(company: string, objecttype: string, documenttype: string, itemnum: string, language: string, size: string, swp: boolean) {
-    const r = new sql.Request(await db.get(DB_NAME))
+    const r = new sql.Request(this._pool)
     r.input('company', sql.VarChar, company)
     r.input('objecttype', sql.VarChar, objecttype)
     r.input('documenttype', sql.VarChar, documenttype)
@@ -52,8 +56,10 @@ export default class Document {
       }
     }
     if (swp) {
+      this._logger.debug(`Found no records, returning undefined!`)
       return undefined
     }
+    this._logger.debug(`Found no records, returning undefined!`)
     return { result: { guid: '6258fae1-fbd0-45f1-8aef-68b76a30276e' } }
   }
 }

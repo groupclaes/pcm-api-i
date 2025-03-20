@@ -1,49 +1,30 @@
-# ---- Build ----
-FROM --platform=linux/amd64 groupclaes/npm AS build
-
-# change the working directory to new exclusive app folder
+# ---- deps ----
+FROM groupclaes/esbuild:v0.25.0 AS deps
 WORKDIR /usr/src/app
 
-# copy project file
-COPY ./ ./
+COPY package.json ./package.json
+COPY .npmrc ./.npmrc
 
-# install esbuild globaly
-RUN npm install esbuild -g
-
-# install node packages
-RUN npm install
-
-# create esbuild package
-RUN esbuild ./src/index.ts --bundle --platform=node --minify --packages=external --external:'./config' --outfile=index.min.js
+RUN npm install --omit=dev --ignore-scripts
 
 
-# ---- Deps ----
-FROM --platform=linux/amd64 groupclaes/npm AS depedencies
+# ---- build ----
+FROM deps AS build
+COPY index.ts ./index.ts
+COPY src/ ./src
 
-# change the working directory to new exclusive app folder
-WORKDIR /usr/src/app
-
-# copy package file
-COPY package.json ./
-
-# install node packages
-RUN npm install
+RUN npm install --ignore-scripts && npm run build
 
 
-# --- release ---
-FROM --platform=linux/amd64 groupclaes/node AS release
+# ---- final ----
+FROM groupclaes/node:22
 
 # set current user to node
 USER node
-
-# change the working directory to new exclusive app folder
 WORKDIR /usr/src/app
 
-# copy dependencies
-COPY --chown=node:node --from=depedencies /usr/src/app ./
+# copy dependencies and assets
+COPY --from=deps /usr/src/app ./
+COPY --from=build /usr/src/app/index.min.js ./
 
-# copy project file
-COPY --chown=node:node --from=build /usr/src/app/index.min.js ./
-
-# command to run when intantiate an image
 CMD ["node","index.min.js"]
