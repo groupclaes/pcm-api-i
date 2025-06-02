@@ -119,6 +119,7 @@ export default async function(fastify: FastifyInstance): Promise<void> {
       swp?: boolean
       size?: string
       s?: string
+      ext?: string
     }
   }>, reply: FastifyReply): Promise<FastifyReply> {
     try {
@@ -126,13 +127,21 @@ export default async function(fastify: FastifyInstance): Promise<void> {
       const repo = new Document(request.log, pool)
       const s: string = request.query.s ?? 'source'
 
-      let options = {
+      let options: ImageToolsOptions = {
         size: config.imageSizeMap[s] ?? 800,
         quality: config.imageQualityMap[s] ?? config.defaultImageQuality,
         cache: config.cacheEnabled ?? false,
         // Enable webp automatically if the client supports it
         webp: request.headers['accept'] && request.headers['accept'].indexOf('image/webp') > -1
       }
+
+      if (request.query.ext) {
+        options.quality = 100
+        options.format = request.query.ext
+      }
+
+      if (request.query.s === 'original')
+        options.size = 0
 
       // get file guid for request
       const response = await repo.getGuidByParams(request.params.company, request.params.objecttype, request.params.documenttype, request.params.itemnum ?? '100', request.params.language ?? 'nl', request.query.size ?? 'any', request.query.swp != undefined)
@@ -153,9 +162,10 @@ export default async function(fastify: FastifyInstance): Promise<void> {
             .type(options.webp ? 'image/webp' : 'image/jpeg')
             .header('etag', etag)
 
-          const data = await imageTools.getImage(_fn, '/' + (config.imageSizeFileMap[options.size] ?? 'file'), etag, options)
+          const data: Buffer = await imageTools.getImage(_fn, '/' + (config.imageSizeFileMap[options.size] ?? 'file'), etag, options)
 
           return reply
+            .type(resolveMimeType(options))
             .send(data)
         }
         request.log.fatal({
