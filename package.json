@@ -11,7 +11,7 @@
   "license": "MIT",
   "dependencies": {
     "@fastify/etag": "^5.2.0",
-    "@groupclaes/fastify-elastic": "^4.4.0",
+    "@groupclaes/fastify-elastic": "^5.2.1",
     "@groupclaes/pcm-imagetools": "^1.1.4",
     "fastify": "^4.29.0",
     "jose": "^5.9.6",
